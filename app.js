@@ -438,7 +438,7 @@ $("btn-game-back").onclick = () => { renderMenu(); showScreen("screen-menu"); };
 
 /* --- cartões amarelos --- */
 $("btn-yellow").onclick = () => { renderYellowList(); openOverlay("overlay-yellow"); };
-$("btn-yellow-close").onclick = () => closeOverlay("overlay-yellow");
+$("btn-yellow-close").onclick = $("btn-yellow-x").onclick = () => closeOverlay("overlay-yellow");
 
 function renderYellowList() {
   const a = db.active;
@@ -507,7 +507,7 @@ function finishGame() {
 function gameTable(g, opt) {
   const ids = g.teams.flatMap((t) => t.players)
     .sort((x, y) => (g.points[y] - g.points[x]) || nameIn(g, x).localeCompare(nameIn(g, y), "pt"));
-  let h = `<table class="stbl"><thead><tr><th class="pn">Jogador</th>${COLS.map(([, l]) => `<th>${l}</th>`).join("")}${opt.yellow ? "<th>Amarelos</th>" : ""}<th>Pontos</th><th>MVP</th></tr></thead><tbody>`;
+  let h = `<table class="stbl"><thead><tr><th class="pn">Jogador</th>${COLS.map(([, l]) => `<th>${l}</th>`).join("")}${opt.yellow ? "<th>Amarelos</th>" : ""}<th>Pontos</th><th>${opt.editMvp ? "Votos MVP" : "MVP"}</th></tr></thead><tbody>`;
   for (const pid of ids) {
     const s = g.stats[pid] || {};
     const win = g.winner !== -1 && teamOf(g, pid) === g.winner;
@@ -515,8 +515,8 @@ function gameTable(g, opt) {
     for (const [k] of COLS) h += `<td><span class="n">${s[k] || 0}</span></td>`;
     if (opt.yellow) h += `<td><span class="n">${s.yellow || 0}${s.expelled ? ` <small>(${s.expelled} exp.)</small>` : ""}</span></td>`;
     h += `<td class="pts">${g.points[pid]}</td>`;
-    if (opt.editMvp) h += `<td class="mvp-cell"><span class="cellc"><button class="pm pm--sm" data-act="dec" data-pid="${pid}">−</button><span class="n ${s.mvp ? "" : "zero"}">${s.mvp || 0}</span><button class="pm pm--sm pm--plus" data-act="inc" data-pid="${pid}">+</button></span></td>`;
-    else h += `<td><span class="n">${s.mvp || 0}</span></td>`;
+    if (opt.editMvp) h += `<td class="mvp-cell"><span class="cellc"><button class="pm pm--sm" data-act="dec" data-pid="${pid}">−</button><span class="n ${s.votes ? "" : "zero"}">${s.votes || 0}</span><button class="pm pm--sm pm--plus" data-act="inc" data-pid="${pid}">+</button></span></td>`;
+    else h += `<td><span class="n">${s.mvp ? "★" : (s.votes || 0) ? `<small>${s.votes} voto${s.votes > 1 ? "s" : ""}</small>` : "–"}</span></td>`;
     h += `</tr>`;
   }
   return h + `</tbody></table>`;
@@ -544,10 +544,20 @@ $("summary-table-wrap").addEventListener("click", (e) => {
   const g = db.games.find((x) => x.id === summaryId);
   if (!b || !g) return;
   const s = g.stats[b.dataset.pid];
-  s.mvp = Math.max(0, (s.mvp || 0) + (b.dataset.act === "inc" ? 1 : -1));
-  recompute(g); save(); renderSummary();
+  s.votes = Math.max(0, (s.votes || 0) + (b.dataset.act === "inc" ? 1 : -1));
+  save(); renderSummary();
 });
-$("btn-summary-next").onclick = () => { renderMenu(); showScreen("screen-menu"); };
+$("btn-summary-next").onclick = () => {
+  const g = db.games.find((x) => x.id === summaryId);
+  if (g) {
+    const ids = g.teams.flatMap((t) => t.players);
+    const max = Math.max(0, ...ids.map((p) => g.stats[p].votes || 0));
+    ids.forEach((p) => { g.stats[p].mvp = max > 0 && (g.stats[p].votes || 0) === max ? 1 : 0; });
+    recompute(g); save();
+    const w = ids.filter((p) => g.stats[p].mvp).map((p) => nameIn(g, p));
+    if (w.length) toast("MVP: " + w.join(", "));
+  }
+  renderMenu(); showScreen("screen-menu"); };
 
 /* ============================================================
    HISTÓRICO / DETALHE
@@ -569,7 +579,19 @@ function openDetail(id, back) {
   document.querySelector("#screen-game-detail .bar-back").dataset.back = back;
   const g = db.games.find((x) => x.id === id);
   if (!g) return;
-  $("game-detail-content").innerHTML = `<div class="detail-head">${fmtDate(g.date)} · ${g.size} vs ${g.size}<br><b>${winnerHead(g)}</b></div><div class="detail-tbl">${gameTable(g, { yellow: true })}</div>`;
+  const ids = g.teams.flatMap((t) => t.players);
+  const nm = (p) => esc(nameIn(g, p));
+  const mvps = ids.filter((p) => g.stats[p].mvp);
+  const ys = ids.filter((p) => g.stats[p].yellow).map((p) => `${nm(p)} (${g.stats[p].yellow})`);
+  const ex = ids.filter((p) => g.stats[p].expelled).map((p) => `${nm(p)} (${g.stats[p].expelled}×)`);
+  const top = [...ids].sort((x, y) => g.points[y] - g.points[x])[0];
+  const line = (l, v) => `<div class="dline"><span>${l}</span><b>${v}</b></div>`;
+  $("game-detail-content").innerHTML = `<div class="detail-head">${fmtDate(g.date)} · ${g.size} vs ${g.size}<br><b>${winnerHead(g)}</b></div>
+    <div class="detail-head">${line("🏆 MVP", mvps.length ? mvps.map((p) => `${nm(p)} (${g.stats[p].votes || 0} votos)`).join(", ") : "—")}
+    ${line("⭐ Mais pontos", top ? `${nm(top)} (${g.points[top]})` : "—")}
+    ${line("🟨 Amarelos", ys.length ? ys.join(", ") : "Nenhum")}
+    ${line("🟥 Expulsos (1 min)", ex.length ? ex.join(", ") : "Ninguém")}</div>
+    <div class="detail-tbl">${gameTable(g, { yellow: true })}</div>`;
   showScreen("screen-game-detail");
 }
 $("btn-delete-game").onclick = async () => {

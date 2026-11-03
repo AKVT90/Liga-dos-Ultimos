@@ -185,3 +185,9 @@ input{font-family:inherit}
 }
 .resume-actions{display:flex;gap:6px}
 .resume-btn--ghost{background:transparent;color:var(--text-mid);border:1px solid var(--panel-line)}
+.overlay-card--list{position:relative}
+.overlay-x{position:absolute;top:8px;right:8px;width:34px;height:34px;border-radius:50%;font-size:16px;color:var(--text-mid);background:#2a2a2a}
+.dline{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px solid var(--panel-line)}
+.dline:last-child{border-bottom:none}
+.dline span{color:var(--text-dim);white-space:nowrap}
+.dline b{text-align:right;color:var(--white)}
