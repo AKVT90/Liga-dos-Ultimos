@@ -206,6 +206,7 @@ function renderMenu() {
 }
 
 $("btn-settings").onclick = () => { renderSettings(); showScreen("screen-settings"); };
+$("btn-ranking").onclick = () => { renderRanking(); showScreen("screen-ranking"); };
 $("btn-players").onclick = () => { renderPlayers(); showScreen("screen-players"); };
 $("btn-history").onclick = () => { renderHistory(); showScreen("screen-history"); };
 $("btn-new-game").onclick = async () => {
@@ -558,6 +559,83 @@ $("btn-summary-next").onclick = () => {
     if (w.length) toast("MVP: " + w.join(", "));
   }
   renderMenu(); showScreen("screen-menu"); };
+
+/* ============================================================
+   RANKING + GRÁFICO DE EVOLUÇÃO
+   ============================================================ */
+const LINE_COLORS = ["#4aa8e8","#e8832f","#4c9a3a","#f27ca6","#a64ca6","#9ae06a","#ef4a3c","#7fe8f0","#f4f1ea","#2f6ba0","#f4c430","#8a5cf6","#2fb5a0","#c1432f"];
+let chartMode = "game";       // "game" = pontos por jogo | "cum" = acumulado
+let chartHidden = new Set();
+
+function renderRanking() {
+  const box = $("ranking-content");
+  if (!db.players.length || !db.games.length) {
+    box.innerHTML = `<p class="empty">O ranking aparece depois do primeiro jogo terminado.</p>`;
+    return;
+  }
+  const rows = db.players.map((p) => ({ p, t: playerTotals(p.id) }))
+    .sort((a, b) => b.t.points - a.t.points || b.t.avg - a.t.avg || a.p.name.localeCompare(b.p.name, "pt"));
+  const heads = ["Jogos", "Pontos", "Média", "Win %", "Vit.", "MVP", ...COLS.map(([, l]) => l), "Amarelos", "Expulsões"];
+  let h = `<div class="rank-tbl"><table class="stbl"><thead><tr><th class="pn">Jogador</th>${heads.map((x) => `<th>${x}</th>`).join("")}</tr></thead><tbody>`;
+  rows.forEach(({ p, t }, i) => {
+    const vals = [t.games, `<b style="color:var(--yellow)">${t.points}</b>`, fmt1(t.avg), fmt1(t.winRate) + "%", t.wins, t.mvp,
+      ...COLS.map(([k]) => t[k]), t.yellow, t.expelled];
+    h += `<tr><td class="pn"><span class="pos">${i + 1}</span>${esc(p.name)}</td>${vals.map((v) => `<td>${v}</td>`).join("")}</tr>`;
+  });
+  h += `</tbody></table></div>
+  <div class="chart-box">
+    <div class="chart-top"><span class="section-label" style="margin:0">Evolução</span>
+      <div class="seg"><button data-mode="game" class="${chartMode === "game" ? "on" : ""}">Pontos por jogo</button><button data-mode="cum" class="${chartMode === "cum" ? "on" : ""}">Acumulado</button></div></div>
+    <div class="chart-scroll" id="chart-scroll"></div>
+    <div class="legend" id="chart-legend"></div>
+  </div>`;
+  box.innerHTML = h;
+  box.querySelectorAll("[data-mode]").forEach((b) => (b.onclick = () => { chartMode = b.dataset.mode; renderRanking(); }));
+  drawChart(rows.map((r) => r.p));
+}
+
+function drawChart(players) {
+  const games = [...db.games].sort((a, b) => a.date.localeCompare(b.date));
+  const n = games.length;
+  const colorOf = (p) => LINE_COLORS[db.players.findIndex((x) => x.id === p.id) % LINE_COLORS.length];
+  // séries (null = não jogou → linha interrompida)
+  const series = players.map((p) => {
+    let acc = 0;
+    const v = games.map((g) => {
+      if (!g.stats[p.id]) return chartMode === "cum" ? acc : null;
+      acc += g.points[p.id] || 0;
+      return chartMode === "cum" ? acc : g.points[p.id] || 0;
+    });
+    return { p, v, color: colorOf(p), off: chartHidden.has(p.id) };
+  });
+  const vis = series.filter((s) => !s.off);
+  const all = vis.flatMap((s) => s.v).filter((x) => x !== null);
+  let lo = Math.min(0, ...(all.length ? all : [0])), hi = Math.max(5, ...(all.length ? all : [5]));
+  const step = [1, 2, 5, 10, 20, 25, 50, 100, 200, 500].find((s) => (hi - lo) / s <= 7) || 1000;
+  lo = Math.floor(lo / step) * step; hi = Math.ceil(hi / step) * step;
+  const W = Math.max(Math.min(window.innerWidth - 50, 900), n * 56 + 70), H = 280;
+  const L = 38, R = 30, T = 12, B = 30;
+  const x = (i) => L + (n === 1 ? (W - L - R) / 2 : (i * (W - L - R)) / (n - 1));
+  const y = (v) => T + ((hi - v) / (hi - lo)) * (H - T - B);
+  let svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="Space Mono, monospace" font-size="11">`;
+  for (let v = lo; v <= hi; v += step) {
+    svg += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="${v === 0 ? "#555" : "#2c2c2c"}"/><text x="${L - 6}" y="${y(v) + 4}" text-anchor="end" fill="#8a8a8a">${v}</text>`;
+  }
+  games.forEach((g, i) => { svg += `<text x="${x(i)}" y="${H - 10}" text-anchor="middle" fill="#8a8a8a">Jogo ${i + 1}</text>`; });
+  vis.forEach((s) => {
+    let d = "", pen = false;
+    s.v.forEach((val, i) => { if (val === null) { pen = false; return; } d += `${pen ? "L" : "M"}${x(i)},${y(val)} `; pen = true; });
+    svg += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2.2" stroke-linejoin="round"/>`;
+    s.v.forEach((val, i) => { if (val !== null) svg += `<circle cx="${x(i)}" cy="${y(val)}" r="3.6" fill="${s.color}" stroke="#0a0a0a" stroke-width="1"><title>${esc(s.p.name)} · Jogo ${i + 1}: ${val}</title></circle>`; });
+  });
+  $("chart-scroll").innerHTML = svg + `</svg>`;
+  $("chart-legend").innerHTML = series.map((s) => `<button class="${s.off ? "off" : ""}" data-lp="${s.p.id}"><i style="background:${s.color}"></i>${esc(s.p.name)}</button>`).join("");
+  $("chart-legend").querySelectorAll("[data-lp]").forEach((b) => (b.onclick = () => {
+    const id = b.dataset.lp;
+    chartHidden.has(id) ? chartHidden.delete(id) : chartHidden.add(id);
+    drawChart(players);
+  }));
+}
 
 /* ============================================================
    HISTÓRICO / DETALHE
